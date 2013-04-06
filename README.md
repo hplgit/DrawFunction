@@ -1,4 +1,4 @@
-draw_function
+DrawFunction
 =============
 
 Utility for interactive drawing of functions in a GUI and export of
