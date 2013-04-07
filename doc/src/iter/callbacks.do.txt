@@ -157,5 +157,111 @@ print solve_differential_equation(lambda u, t: -u, 1, 4)
 
 ==== Simulation-inspired example ====
 
-Logistic growth with M(n) and user_action as callbacks.
+__Population growth.__
+The next examples concerns an iterative algorithm of the type
+that very often arises in scientific computations.
+As particular application we look at a model for population
+growth. Examples of populations are humans, animals, and cell cultures.
+To predict the evolution of a population we need a model.
+The most basic model assumes that net growth is proportional
+to the size of the population. For example, if you double the population,
+you expect twice as many children and twice as many deaths, but
+the net growth will also be twice as big. Letting $u_n$ be the
+size of the population at time $t=t_n$, the population $u_{n+1}$
+at some later time $t_{n+1}$ is $u_n$ plus a growth proportional to $u_n$:
 
+!bt
+\begin{equation}
+u_{n+1} = u_{n} + ru_{n},
+label{callback:logistic:exp:eq}
+\end{equation}
+!et
+where $r$ is a proportionality factor that must be measured.
+
+__Limited resources.__
+Models of the form (ref{callback:logistic:exp:eq})
+lead to *exponential growth*. In fact, one can show
+that $u_n=u_0(1+r)^n$, which becomes very big for large $n$.
+This is unrealistic because the environment has limited resources and
+can hence support only a finite size $M$ of the population. As
+the population size $u_n$ approaches $M$, the growth rate must
+decrease and eventually become zero when the limit $M$ is reached.
+
+A simple extension of the model (ref{callback:logistic:exp:eq}) to
+incorporate a reducing $r$ as $u_n$ grows, is to replace
+$r$ by $r(1-u_n/M)$, which equals $r$ when $u_n\ll M$ (growth with
+unlimited resources) and which
+reduces to zero when $u_n=M$. This modification is very simple, yet
+it has proven to be extremely powerful in predicting population
+sizes in environments with limited resources.
+
+__The model.__
+Given $u_0$, $r$, and $M$, we want to compute $u_n$ recursively
+according to the formula.
+!bt
+\begin{equation}
+u_{n+1} = u_{n} + r(1-\frac{u_n}{M})u_{n}\thinspace .
+label{callback:logistic:eq}
+\end{equation}
+!et
+The process described by this modified model is known as *logistic growth*.
+The model needs known $u_0$, $r$, and $M$ as input. Then the
+formula can compute $u_1$, $u_2$, and so on.
+
+__Implementation.__
+We see from (ref{callback:logistic:eq}) that to compute $u_{n+1}$,
+we only need $u_n$ and no population sizes before time $t_n$.
+It is therefore enough to store the new and the previous population
+size. An implementation applies a `for` loop for computing `u`
+representing $u_n$ for $n=1,2,\ldots,N$:
+
+!bc pycod
+for n in range(N):
+    u = u0 + r*u0*(1 - u0/M)
+    u0 = u
+!ec
+
+#@@@CODE src-iter/iterators.py
+
+
+ * with callbacks
+ * very simple use
+ * more advanced with clousures
+ * more advanced with classes instead of clousures
+
+Continue with iterators, starting with the same logistic iteration.
+Just iteration, no callbacks.
+
+iteration-iteration is fine
+iteration-callback does not work
+single-call-callback works
+
+
+===== Exercise: Growth of the world population =====
+
+The "world population": "http://en.wikipedia.org/wiki/World_population"
+was 2.56 billion people in 1950 and
+3.04 billion in 1960. Use these numbers to estimate $r_0$
+in the exponential growth model (ref{callback:logistic:exp:eq}),
+using the fact that the solution is $u_n=u_0(1+r)^n$.
+The population was at 7 billion in 2012. Would the model
+predict that from the 1950-1960 data? What are the predictions for
+2100 and 2200?
+
+!bsol
+!bc ipy
+>>> u_1950 = 2.56
+>>> u_1960 = 3.04
+>>> n = 10
+>>> r = (u_1960/u_1950)**(1./n) - 1
+>>> r
+0.017333537754854023
+>>> u_2012 = u_1950*(1 + r)**(2012-1950)
+>>> u_2012
+7.429650744022528
+>>> u_1950*(1 + r)**(2100-1950)
+33.70887353665255
+>>> u_1950*(1 + r)**(2200-1950)
+187.9664861271987
+!ec
+!esol

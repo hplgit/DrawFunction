@@ -2,10 +2,8 @@
 # Problem: relation between callback and yield/iterator.
 import sys
 
-# logistic growth, no storage!
 def logistic_growth(u0, r, M, N, user_action=lambda u, n: None):
-    index_set = range(N)
-    for n in index_set:
+    for n in range(N):
         u = u0 + r*u0*(1 - u0/float(M(n, u0)))
         user_action(u, n+1)
         u0 = u
