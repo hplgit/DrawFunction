@@ -25,6 +25,7 @@ class DrawFunction:
                  sliders=True,
                  spline_smoothing=True,
                  response=None,
+                 animated_response=False,
                  fig=None):
         self.xmin, self.xmax, self.ymin, self.ymax = \
                    xmin, xmax, ymin, ymax
@@ -35,6 +36,7 @@ class DrawFunction:
         self.title = title
         self.spline_smoothing = spline_smoothing
         self.response = response
+        self.animated_response = animated_response
         self._num_clicks = 0
         self._x = self._y = []
         self.x = self.y = None
@@ -44,7 +46,6 @@ class DrawFunction:
         if response is not None:
             if not isinstance(response, dict) or \
                'curves' not in response or \
-               'compute_function' not in response or \
                not isinstance(response['curves'], (list,tuple)):
                 raise ValueError("""response must be dict like
     response = dict(
@@ -104,7 +105,10 @@ class DrawFunction:
 
     def on_key(self, event):
         if event.key == 'r':
-            self.update_response()
+            if self.animated_response:
+                self.update_response_animation()
+            else:
+                self.update_response()
         elif event.key == 'c':
             self.clear_response()
 
@@ -163,15 +167,46 @@ class DrawFunction:
         self.sample_fraction = float(self.slider_sample_fraction.val)/100
         self.smooth_and_plot_drawing()
 
+    # If compute_function is an iterator we can iterate here, otherwise
+    # do one call, pass self.response_axes and plt to compute_function
+    # and rely on the animation loop there
+
     def update_response(self):
+        if not 'compute_function' in self.response:
+            raise KeyError('response dict had no "compute_function" key')
+        compute = self.response['compute_function']
+
         x, y = self.get_curve()  # input
-        response = self.response['compute_function'](x, y)
+        response = compute(x, y)
         if isinstance(response[0], np.ndarray):
             # response is x, u rather than [(x, y)]
             response = [response]
         for i, curve in enumerate(response):
             self.response_axes[i].plot(curve[0], curve[1])
         plt.draw()
+
+    def update_response_animation(self):
+        if not 'compute_function' in self.response:
+            raise KeyError('response dict had no "compute_function" key')
+        compute = self.response['compute_function']
+
+        def process(response):
+            if isinstance(response[0], np.ndarray):
+                # response is x, u rather than [(x, y)]
+                response = [response]
+            for i, curve in enumerate(response):
+                self.response_axes[i].plot(curve[0], curve[1])
+            plt.draw()
+
+        x, y = self.get_curve()  # input
+        import collection
+        if isinstance(compute, collection.Iterable):
+            # Do the plotting here
+            for response in compute(x, y):
+                process(response)
+        else:
+            # Leave plotting to compute
+            compute(x, y, self.response_axes, plt)
 
     def smooth_and_plot_drawing(self):
         # Resample uniformly (helps on making splines work)

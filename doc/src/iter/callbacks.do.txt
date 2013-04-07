@@ -1,0 +1,161 @@
+This callback explanation is suited for an appendix,
+another appendix is about iterators, then something can
+make things problematic when you combine the two.
+
+======= Callback functions =======
+
+Scientific software often implements a general algorithm in terms of a
+function which works in a wide range of different applications, but
+the user must provide some application-specific information to the
+function. In many cases this information takes the form of another
+function where the user performs her application-specific tasks. This
+other specialized function is known as a *callback* function, being
+called from the general function running the algorithm.  Callback
+functions occurs frequently in scientific libraries.
+
+# Bare callbacks her og problems after iterators are explained?
+In the following
+we shall address some challenges when libraries with callback
+functions are to be glued with other libraries also using
+callbacks. Our particular focus will be on algorithm is of iterative
+nature, which appear very often in scientific computations.
+
+First we list some examples of callback functions, then we present
+a specific type of computation to work with...
+
+===== Examples from sorting =====
+
+!bc ipy
+>>> words = 'Hans Petter is a first name'.split()
+>>> sorted(words)
+['Hans', 'Petter', 'a', 'first', 'is', 'name']
+!ec
+In Python's default sorting algorithm, upper case ranks ahead of
+lower case, meaning that `'Hans'` comes before `'a'` despite
+the fact that h becomes after a in the alphabet. To obtain
+case-insensitive sorting, the `sorted` function has a callback
+function given as a keyword argument `key`. That function is used
+to transform an element in the list prior to sorting. Here we
+would typically transform any element to lower case such that
+the sorting algorithm only works with lower case words.
+
+!bc ipy
+>>> def lower(word):
+...     return word.lower()
+...
+>>> sorted(words, key=lower)
+['a', 'first', 'Hans', 'is', 'name', 'Petter']
+!ec
+Here we write our own callback function and provide that in the
+call to `sorted`. Experienced Python programmers would not bother
+to write a separate function, but instead say
+!bc pycod
+sorted(words, key=lambda word: word.lower)
+sorted(words, key=str.lower)
+!ec
+A slightly more complicated setting is sorting of dictionaries
+according to one special key. Suppose we have dictionaries with
+two keys: `h` for height and `w` for weight. A list of such
+dictionaries is to be sorted according to weight and to height.
+The solution is to provide a callback function that from an
+element in the list extracts the right information to be used
+in the sort:
+
+!bc ipy
+>>> data = [dict(h=1.78, w=76.5), dict(h=1.69, w=77)]
+>>> sorted(data, key=lambda d: d['w'])  # sort wrt weight
+[{'h': 1.78, 'w': 76.5}, {'h': 1.69, 'w': 77}]
+>>> sorted(data, key=lambda d: d['h'])  # sort wrt height
+[{'h': 1.69, 'w': 77}, {'h': 1.78, 'w': 76.5}]
+!ec
+
+The bottom line is that `sorted` implements some general sorting
+algorithm whose details are something we do not need to know about,
+and through callback functions such as `key` we can tailor the
+sort to fit our specific application.
+
+
+===== Examples from numerical calculus =====
+
+Readers familiar with numerical methods for doing calculus may appreciate
+to see examples of callback functionality in that context.
+Typical operations on mathematical functions $f(x)$, as known from
+calculus, are integration
+$\int_a^b f(x)dx$, differentiation $f'(x)$,
+root finding, i.e., solving equations $f(x)=0$,
+and integration of differential equations $u'(t) = f(u,t)$. In all these
+applications one can make general library functions for the
+mathematical function, but the user's $f$ will be specific to a
+particular application and must therefore be provided as a
+callback function. A simple example is
+
+!bc pycod
+def differentiate(f, x, h=1E-4):
+    """General method for computing f'(x)."""
+    return (f(x+h) - f(x))/h
+
+# Specific application
+def my_f(x):
+    return 2*x + 1
+
+print differentiate(my_f, 0)   # result: 2
+!ec
+The `differentiate` function is a general algorithm for computing
+a quantity, here the derivative, but it works for any problem since
+the particular formula to differentiate is parameterized by the
+argument `f`, which in this implementation
+is a callback function provided by the user.
+
+Some other general
+algorithms with a similar callback function
+appears below.
+
+!bc pycod
+def integrate(f, a, b, n=100):
+    """General method for integrating f(x) from a to b."""
+    h = (b-a)/float(n)
+    # Integrate with the Trapezoidal method
+    return h*(0.5*f(a) + 0.5*f(b) +
+              sum(f(a+i*h) for i in range(1,n+1)))
+
+# Integrate t**2 from 0 to 2
+def g(t):
+    return t**2
+
+print integrate(g, 0, 2)
+
+
+def find_root(f, x0, tolerance=1E-6):
+    """General method for solving f(x)=0 (x0: initial guess)."""
+    # Iterate for root with Newton's method
+    x = x0
+    for i in range(100):  # max 100 iterations
+        x = x - f(x)/differentiate(f, x)
+        if abs(f(x)) < tolerance:
+            return x
+    # returns None if no root found in 100 iterations
+
+# Solve t**2 = 2, with t=1 as initial guess
+print 'root:', find_root(lambda t: t**2 - 2, 1)
+
+
+def solve_differential_equation(f, u0, T, dt=0.01):
+    """General method for solving u'=f(u,t) for t in [0,T],
+    with u(0)=u0 and using steps of dt."""
+    # Use the Forward Euler method
+    N = int(round(T/dt))  # no of intervals
+    u = np.zeros(N+1);  t = np.zeros(N+1)
+    u[0] = u0; t[0] = 0
+    for n in range(N):
+        t[n+1] = t[n] + dt
+        u[n+1] = u[n] + dt*f(u, t[n])
+    return u
+
+# Solve u'=-u, u(0)=1, from t=0 to t=4
+print solve_differential_equation(lambda u, t: -u, 1, 4)
+!ec
+
+==== Simulation-inspired example ====
+
+Logistic growth with M(n) and user_action as callbacks.
+
