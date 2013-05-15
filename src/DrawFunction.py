@@ -1,7 +1,7 @@
 # Extensions:
 # Allow curves returned from compute_function to be dicts;
 # {'label1': (x1,y1), 'label2': (x2,y2)} instead of just (x,y)
-# Allow the returned curve be a object for function animation
+# Allow the returned curve to be a object for function animation
 # (of several curves).
 # http://jakevdp.github.io/blog/2012/08/18/matplotlib-animation-tutorial/
 
@@ -9,10 +9,42 @@ import matplotlib.pyplot as plt
 import matplotlib.widgets
 import matplotlib.axes
 import numpy as np
-from scipy.interpolate import UnivariateSpline as Spline
-from Scientific.Functions.Interpolation \
-     import InterpolatingFunction
 import sys
+
+def smooth_function_from_coordinates(
+    x, y,  # coordinates of some curve
+    sample_fraction=1.0,  # fraction of x,y points used for resampling
+    spline_smoothing=4,   # degree of spline (1 gives piecewise linear)
+    ):
+
+    """
+    Given a set of coordinates in the `x` and `y` arrays, create a
+    smooth function from these coordinates by 1) resampling n
+    uniformly distributed points by linear interpolation of the `x`
+    and `y` coordinates, where n is given by `sample_fraction` times
+    the length of `x`; and 2) interpolating the resampled points by
+    a smooth spline, where `spline_smoothing` is an integer holding
+    the degree of the piecewise polynomial pieces of the spline
+    (0 and 1 gives a piecewise linear function, 2 and higher gives
+    splines of that order). Return the smooth function as a
+    Python function of x, together with the (uniformly distributed)
+    resampled points on which the smooth function is based.
+    """
+    # Construct linear interpolator of data points
+    from Scientific.Functions.Interpolation \
+         import InterpolatingFunction
+    linear = InterpolatingFunction([x], y)
+    # Resample
+    xp = np.linspace(x[0], x[-1],
+                     sample_fraction*len(x))
+    yp = np.array([linear(xi) for xi in xp])
+    # Spline smoothing or linear interpolation, based on (xp,yp)
+    if spline_smoothing >= 2:
+        from scipy.interpolate import UnivariateSpline as Spline
+        function = Spline(xp, yp, s=0, k=spline_smoothing)
+    else:
+        function = InterpolatingFunction([xp], yp)
+    return function, xp, yp
 
 class DrawFunction:
     def __init__(self,
@@ -64,19 +96,28 @@ class DrawFunction:
         else:
             self.fig = fig
 
+        # Make subplots with self.num_curves (= one drawn curve
+        # plus response functions) below each other.
+        # self.ax: axes of the drawn curve
+        # self.response_axes: axes of the responses
         self.ax = self.fig.add_subplot(self.num_curves, 1, 1)
         self.response_axes = []
         for i in range(2, self.num_curves+1):
             self.response_axes.append(
                 self.fig.add_subplot(self.num_curves, 1, i))
 
-        plt.subplots_adjust(left=0.1, bottom=0.2) # move subplot into figure
+        # Move subplot into figure: [0,1]x[0,1] is to total
+        # figure area; here we let the subplot area have lower
+        # left corner at (0.1,0.2), leaving the space below
+        # for slider widgets.
+        plt.subplots_adjust(left=0.1, bottom=0.2)
 
         # Init plot with axes extent, labels, etc.
         self.clear_drawing()
         if self.response:
             self.clear_response()
 
+        # Bind events to the upper plot (the drawn curve: self.ax)
         self.widget = matplotlib.widgets.AxesWidget(self.ax)
         self.widget.connect_event('button_press_event', self.on_click)
         self.widget.connect_event('motion_notify_event', self.on_move)
@@ -88,14 +129,16 @@ class DrawFunction:
         # the drawing we use for defining the spline (sample_fraction)
         # and the number of intervals we sample from the spline
         # (resolution).
-        self.slider_ax = matplotlib.axes.Axes(
-            self.fig, [0.1, 0.1, 0.7, 0.05])
+        # (Axes does not work:)
+        #self.slider_ax = matplotlib.axes.Axes(
+        #    self.fig, [0.1, 0.1, 0.7, 0.05])
         self.slider_ax = plt.axes([0.15, 0.05, 0.7, 0.035])
         self.slider_resolution = matplotlib.widgets.Slider(
             self.slider_ax, 'samples',
             valmin=0, valmax=2*self.resolution,
             valinit=self.resolution, valfmt='%d')
         self.slider_resolution.on_changed(self.update_drawing)
+
         self.slider_ax = plt.axes([0.15, 0.1, 0.7, 0.035])
         self.slider_sample_fraction = matplotlib.widgets.Slider(
             self.slider_ax, '% points',
@@ -104,20 +147,28 @@ class DrawFunction:
         self.slider_sample_fraction.on_changed(self.update_drawing)
 
     def on_key(self, event):
+        """Called with a key is pressed on the keyboard."""
         if event.key == 'r':
+            # Plot responses
             if self.animated_response:
                 self.update_response_animation()
             else:
                 self.update_response()
         elif event.key == 'c':
+            # Clear responses and be ready for new drawing
+            self.clear_drawing()
             self.clear_response()
 
-    def clear_plot(self, ax,
-                   xmin=None, xmax=None,
-                   ymin=None, ymax=None,
-                   xlabel=None, ylabel=None,
-                   title=None):
-        """Make empty plot for given axes `ax`."""
+    def _clear_plot(self, ax,
+                    xmin=None, xmax=None,
+                    ymin=None, ymax=None,
+                    xlabel=None, ylabel=None,
+                    title=None):
+        """
+        Make empty plot for given axes `ax`.
+        `xmin`, etc. can be specified to fix the extent of axes,
+        put labels on axes, and a title.
+        """
         ax.cla()
         if xmin is not None and xmax is not None:
             ax.set_xlim(xmin, xmax)
@@ -133,7 +184,7 @@ class DrawFunction:
         ax.plot([], [])
 
     def clear_drawing(self):
-        """Make empty plot for the drawing."""
+        """Erase the drawing."""
         if self.title == 'help string':
             title = 'Click to start drawing, click to end; repeat until satisfied'
         elif self.title is not None:
@@ -141,11 +192,11 @@ class DrawFunction:
         else:
             title = None
 
-        self.clear_plot(self.ax,
-                        xmin=self.xmin, xmax=self.xmax,
-                        ymin=self.ymin, ymax=self.ymax,
-                        xlabel=self.xlabel, ylabel=self.ylabel,
-                        title=title)
+        self._clear_plot(self.ax,
+                         xmin=self.xmin, xmax=self.xmax,
+                         ymin=self.ymin, ymax=self.ymax,
+                         xlabel=self.xlabel, ylabel=self.ylabel,
+                         title=title)
 
     def clear_response(self):
         """Make empty plots for the responses."""
@@ -156,16 +207,44 @@ class DrawFunction:
             title = curve.get('title', None)
             xlabel = curve.get('xlabel', None)
             ylabel = curve.get('ylabel', None)
-            self.clear_plot(self.response_axes[i],
-                            xmin=self.xmin, xmax=self.xmax,
-                            ymin=ymin, ymax=ymax,
-                            xlabel=xlabel, ylabel=ylabel,
-                            title=title)
+            self._clear_plot(self.response_axes[i],
+                             xmin=self.xmin, xmax=self.xmax,
+                             ymin=ymin, ymax=ymax,
+                             xlabel=xlabel, ylabel=ylabel,
+                             title=title)
 
     def update_drawing(self, val):
+        """Transform the drawing to a smooth spline curve."""
+        # Argument val is not used - we need to grab val in each slider
+
+        # 1. Interpolate linearly between the recorded coordinates.
+        # 2. Resample uniformly.
+        # 3. Fit spline curve to the resampled points.
+        # 4. Draw to smoothed curve.
+        # Pt 2 is necessary to make splines work
+
+        # Get slider values
         self.resolution = self.slider_resolution.val
         self.sample_fraction = float(self.slider_sample_fraction.val)/100
-        self.smooth_and_plot_drawing()
+
+        # Compute smooth function self.spline from recorded coordinates
+        # self.x and self.y
+        if self.x is None or self.y is None:
+            return
+        self.spline, xp, yp = smooth_function_from_coordinates(
+            self.x, self.y,
+            self.sample_fraction,
+            4 if self.spline_smoothing else 1)
+
+        # Plot the smooth version of the drawing and mark the
+        # points used for smoothing
+        x, y = self.get_curve(self.resolution)
+        self.clear_drawing()
+        self.ax.plot(xp, yp, marker='o', color='blue', markersize=4,
+                     linestyle=' ')
+        self.ax.plot(x, y, linestyle='-', color='blue')
+        plt.draw()
+
 
     # If compute_function is an iterator we can iterate here, otherwise
     # do one call, pass self.response_axes and plt to compute_function
@@ -207,24 +286,6 @@ class DrawFunction:
         else:
             # Leave plotting to compute
             compute(x, y, self.response_axes, plt)
-
-    def smooth_and_plot_drawing(self):
-        # Resample uniformly (helps on making splines work)
-        if self.x is None or self.y is None:
-            return
-        xp = np.linspace(self.x[0], self.x[-1],
-                        self.sample_fraction*len(self.x))
-        yp = np.array([self.linear(xi) for xi in xp])
-        if self.spline_smoothing:
-            self.spline = Spline(xp, yp, s=0, k=4)
-        else:
-            self.spline = InterpolatingFunction([self.xp], self.yp)
-        x, y = self.get_curve(self.resolution)
-        self.clear_drawing()
-        self.ax.plot(xp, yp, marker='o', color='blue', markersize=4,
-                     linestyle=' ')
-        self.ax.plot(x, y, linestyle='-', color='blue')
-        plt.draw()
 
     def on_click(self, event):
         """Called when a mouse button is clicked."""
@@ -272,9 +333,7 @@ class DrawFunction:
             if (np.sort(self.x) - self.x).max() != 0:
                 print 'Not a valid function - draw again'
 
-            # Construct linear interpolator of data points
-            self.linear = InterpolatingFunction([self.x], self.y)
-            self.smooth_and_plot_drawing()
+            self.update_drawing(val=-1)
 
     def on_move(self, event):
         """Called when mouse is moved."""
@@ -284,9 +343,11 @@ class DrawFunction:
 
         if self._x and self._y: # are we in a drawing?
             if event.xdata is not None and event.ydata is not None:
-                # Do not allow x smaller than last one
-                if event.xdata < self._x[-1]:
-                    self._x.append(self._x[-1])
+                # Do not allow present x smaller than last recorded x, but
+                # with a small eps larger in x coordinate
+                if event.xdata <= self._x[-1]:
+                    eps = 1E-4
+                    self._x.append(self._x[-1] + eps)
                 else:
                     self._x.append(event.xdata)
                 self._y.append(event.ydata)
@@ -301,6 +362,8 @@ class DrawFunction:
             x = np.linspace(self.x[0], self.x[-1], resolution+1)
             y = self.spline(x)
             return x, y
+        else:
+            raise TypeError('Wrong usage - smoothed drawing is not computed')
 
 
 def drawing2file():
