@@ -5,9 +5,6 @@
 # (of several curves).
 # http://jakevdp.github.io/blog/2012/08/18/matplotlib-animation-tutorial/
 
-import matplotlib.pyplot as plt
-import matplotlib.widgets
-import matplotlib.axes
 import numpy as np
 import sys
 
@@ -46,6 +43,44 @@ def smooth_function_from_coordinates(
         function = InterpolatingFunction([xp], yp)
     return function, xp, yp
 
+
+def extrapolate_endpoints(_x, _y, xmin, xmax):
+    """
+    Given a drawing as a set of coordinates `_x` and `_y`,
+    supposed to be in the interval from `xmin` to `max`,
+    the drawn coordinates will never match the end points.
+    The idea here is to add end points to `_x` and `_y`
+    such that the x coordinate starts at `xmin` and ends
+    at `xmax`. The y coordinate of the two end points is
+    computed by linear extrapolation."""
+    # x and y are the arrays to be returned, including end points
+    x = np.zeros(len(_x)+2)
+    y = np.zeros(len(_y)+2)
+    # Use the drawn _x and _y coordinates as internal points
+    x[1:-1] = _x
+    y[1:-1] = _y
+
+    # xmin boundary
+    x[0] = xmin
+    dx = _x[1] - _x[0]
+    if dx > 1E-10:
+        # Use linear extrapolation formula if dx is not too small
+        y[0] = _y[0] + (_y[1] - _y[0])/dx*(xmin - _x[0])
+    else:
+        y[0] = y[1]
+
+    # xmax boundary
+    x[-1] = xmax
+    dx = _x[-1] - _x[-2]
+    if dx > 1E-10:
+        # Use linear extrapolation formula if dx is not too small
+        y[-1] = _y[-2] + (_y[-1] - _y[-2])/dx*(xmax - _x[-2])
+    else:
+        y[-1] = y[-2]
+
+    return x, y
+
+
 class DrawFunction:
     def __init__(self,
                  xmin=0, xmax=1, ymin=0, ymax=1,
@@ -69,7 +104,8 @@ class DrawFunction:
         self.spline_smoothing = spline_smoothing
         self.response = response
         self.animated_response = animated_response
-        self._num_clicks = 0
+        self.sliders = sliders
+
         self._x = self._y = []
         self.x = self.y = None
         self.spline = None
@@ -91,10 +127,106 @@ class DrawFunction:
         else:
             self.num_curves = 1
 
-        if fig is None:
-            self.fig = plt.figure()
+        self.fig = fig
+
+    # Maybe menu and the others should be interactive plotting classes?
+
+    def menu(self, key):
+        """Menu mapped to key: c is clear, r is compute response."""
+        if key == 'r':
+            # Plot responses
+            if self.animated_response:
+                self.update_response_animation()
+            else:
+                self.update_response()
+        elif key == 'c':
+            # Clear responses and be ready for new drawing
+            self.clear_drawing()
+            self.clear_response()
+
+    # If compute_function is an iterator we can iterate here, otherwise
+    # do one call, pass self.response_axes and plt to compute_function
+    # and rely on the animation loop there
+
+    def update_response(self):
+        raise NotImplementedError
+
+    def update_response_animation(self):
+        raise NoteImplementedError
+
+    def clear_drawing(self):
+        raise NoteImplementedError
+
+    def clear_responses(self):
+        raise NoteImplementedError
+
+    def begin_drawing(self):
+        """Initialize drawing."""
+        self._x = []
+        self._y = []
+        self.spline = None
+        self.x = self.y = None
+
+    def end_drawing(self):
+        # Add end points so that xmin and xmax are included
+        self.x, self.y = extrapolate_endpoints(
+            self._x, self._y, self.xmin, self.xmax)
+
+        self._x = self._y = []  # clear recorded points
+
+        # Check that self.y = f(self.x) is a function
+        # (is guaranteed in on_move)
+        if (np.sort(self.x) - self.x).max() != 0:
+            print 'Not a valid function - draw again'
+
+
+    def add_pt(self, x_pt, y_pt):
+        """Add a (x,y) point."""
+        if x_pt is None or y_pt is None:
+            return
+
+        # 1st point?
+        if len(self._x) == 0 and len(self._y) == 0:
+            self._x.append(x_pt)
+            self._y.append(y_pt)
         else:
-            self.fig = fig
+            # Do not allow present x smaller than last recorded x, but
+            # with a small eps larger in x coordinate
+            if x_pt <= self._x[-1]:
+                eps = 1E-4
+                self._x.append(self._x[-1] + eps)
+            else:
+                self._x.append(x_pt)
+            self._y.append(y_pt)
+
+    def get_curve(self, resolution=None):
+        if resolution is None:
+            resolution = self.resolution
+        if self.spline:
+            x = np.linspace(self.x[0], self.x[-1], resolution+1)
+            y = self.spline(x)
+            return x, y
+        else:
+            raise TypeError('Wrong usage - smoothed drawing is not computed')
+
+
+import matplotlib.pyplot as plt
+import matplotlib.widgets
+import matplotlib.axes
+from StringIO import StringIO
+import base64
+
+class DrawFunctionMpl(DrawFunction):
+    def __init__(self, *args, **kwargs):
+        DrawFunction.__init__(self, *args, **kwargs)
+
+        # Interactive plot on the screen?
+        self.interactive = kwargs.get('interactive', True)
+        self.png_plot = None  # stores a PNG version of the plot as a string
+        self._num_clicks = 0
+
+        if self.fig is None:
+            self.fig = plt.figure()
 
         # Make subplots with self.num_curves (= one drawn curve
         # plus response functions) below each other.
@@ -123,7 +255,7 @@ class DrawFunction:
         self.widget.connect_event('motion_notify_event', self.on_move)
         self.widget.connect_event('key_press_event', self.on_key)
 
-        if not sliders:
+        if not self.sliders:
             return
         # Make sliders to adjust the number of data points from
         # the drawing we use for defining the spline (sample_fraction)
@@ -147,17 +279,9 @@ class DrawFunction:
         self.slider_sample_fraction.on_changed(self.update_drawing)
 
     def on_key(self, event):
-        """Called with a key is pressed on the keyboard."""
-        if event.key == 'r':
-            # Plot responses
-            if self.animated_response:
-                self.update_response_animation()
-            else:
-                self.update_response()
-        elif event.key == 'c':
-            # Clear responses and be ready for new drawing
-            self.clear_drawing()
-            self.clear_response()
+        """Called when a key is pressed."""
+        DrawFunction.menu(self, event.key)
+
 
     def _clear_plot(self, ax,
                     xmin=None, xmax=None,
@@ -213,7 +337,14 @@ class DrawFunction:
                              xlabel=xlabel, ylabel=ylabel,
                              title=title)
 
-    def update_drawing(self, val):
+    def _make_png_str(self):
+        """Return current plot as PNG string."""
+        figfile = StringIO()
+        plt.savefig(figfile, format='png')
+        figfile.seek(0)
+        return base64.b64encode(figfile.buf)
+
+    def update_drawing(self, dummy=-1):
         """Transform the drawing to a smooth spline curve."""
         # Argument val is not used - we need to grab val in each slider
 
@@ -243,12 +374,9 @@ class DrawFunction:
         self.ax.plot(xp, yp, marker='o', color='blue', markersize=4,
                      linestyle=' ')
         self.ax.plot(x, y, linestyle='-', color='blue')
-        plt.draw()
-
-
-    # If compute_function is an iterator we can iterate here, otherwise
-    # do one call, pass self.response_axes and plt to compute_function
-    # and rely on the animation loop there
+        if self.interactive:
+            plt.draw()
+        self.png_plot = self._make_png_str()
 
     def update_response(self):
         if not 'compute_function' in self.response:
@@ -262,7 +390,9 @@ class DrawFunction:
             response = [response]
         for i, curve in enumerate(response):
             self.response_axes[i].plot(curve[0], curve[1])
-        plt.draw()
+        if self.interactive:
+            plt.draw()
+        self.png_plot = self._make_png_str()
 
     def update_response_animation(self):
         if not 'compute_function' in self.response:
@@ -275,7 +405,9 @@ class DrawFunction:
                 response = [response]
             for i, curve in enumerate(response):
                 self.response_axes[i].plot(curve[0], curve[1])
-            plt.draw()
+            if self.interactive:
+                plt.draw()
+            self.png_plot = self._make_png_str()
 
         x, y = self.get_curve()  # input
         import collection
@@ -296,74 +428,32 @@ class DrawFunction:
         self._num_clicks += 1
         if self._num_clicks % 2 == 1:
             # Odd click inside plot area, start new drawing
-
-            self._x = [event.xdata]
-            self._y = [event.ydata]
             self.clear_drawing()
-            self.spline = None
-            self.x = self.y = None
+            DrawFunction.begin_drawing(self)
+            DrawFunction.add_pt(self, event.xdata, event.ydata)
         else:
-            # Even click, end drawing
-
-            # Add end points so that xmin and xmax are included
-            self.x = np.zeros(len(self._x)+2)
-            self.y = np.zeros(len(self._y)+2)
-            self.x[1:-1] = self._x
-            self.y[1:-1] = self._y
-            # Extrapolate end points
-            self.x[0] = self.xmin
-            dx = self._x[1] - self._x[0]
-            if dx > 1E-10:
-                self.y[0] = self._y[0] + \
-                (self.xmin - self._x[0])/dx*(self._y[1] - self._y[0])
-            else:
-                self.y[0] = self.y[1]
-            self.x[-1] = self.xmax
-            dx = self._x[-1] - self._x[-2]
-            if dx > 1E-10:
-                self.y[-1] = self._y[-2] + \
-                (self.xmax - self._x[-1])/dx*(self._y[-1] - self._y[-2])
-            else:
-                self.y[-1] = self.y[-2]
-
-            self._x = self._y = []  # clear recorded points
-
-            # Check that self.y = f(self.x) is a function
-            # (is guaranteed in on_move)
-            if (np.sort(self.x) - self.x).max() != 0:
-                print 'Not a valid function - draw again'
-
-            self.update_drawing(val=-1)
+            # Even click, end it all
+            DrawFunction.end_drawing(self)
+            self._num_clicks = 0
+            self.update_drawing()
 
     def on_move(self, event):
         """Called when mouse is moved."""
         # Act only when in plot area axes (self.ax)
+        print 'moving mouse:', event.xdata, event.ydata
         if event.inaxes != self.ax:
+            print 'outside axes!'
             return
 
-        if self._x and self._y: # are we in a drawing?
-            if event.xdata is not None and event.ydata is not None:
-                # Do not allow present x smaller than last recorded x, but
-                # with a small eps larger in x coordinate
-                if event.xdata <= self._x[-1]:
-                    eps = 1E-4
-                    self._x.append(self._x[-1] + eps)
-                else:
-                    self._x.append(event.xdata)
-                self._y.append(event.ydata)
-                if len(self._x) > 1:
-                    self.ax.plot(self._x, self._y)
-                    plt.draw()
+        if self._num_clicks == 0:
+            return
 
-    def get_curve(self, resolution=None):
-        if resolution is None:
-            resolution = self.resolution
-        if self.spline:
-            x = np.linspace(self.x[0], self.x[-1], resolution+1)
-            y = self.spline(x)
-            return x, y
-        else:
-            raise TypeError('Wrong usage - smoothed drawing is not computed')
+        DrawFunction.add_pt(self, event.xdata, event.ydata)
+        if len(self._x) > 1:
+            self.ax.plot(self._x, self._y)
+            if self.interactive:
+                plt.draw()
+            self.png_plot = self._make_png_str()
 
 
 def drawing2file():
@@ -384,9 +474,11 @@ def drawing2file():
         print 'Usage: %s xmin xmax ymin ymax resolution filename' \
               % sys.argv[0]
         sys.exit(1)
-    plotter = DrawFunction(float(xmin), float(xmax),
-                           float(ymin), float(ymax),
-                           1.0, int(resolution))
+    plotter = DrawFunctionMpl(
+        xmin=float(xmin), xmax=float(xmax),
+        ymin=float(ymin), ymax=float(ymax),
+        sample_fraction=1.0,
+        resolution=int(resolution))
     plt.show()
     data = plotter.get_curve()
     if data is not None:
@@ -452,10 +544,31 @@ press r (without pressing c the previous u curve is visible).
             ],
         compute_function=flow)
     K_min = 0; K_max = 10
-    plotter = DrawFunction(0, L, K_min, K_max,
-                           xlabel='x', ylabel='K(x)',
-                           response=response)
+    plotter = DrawFunctionMpl(
+        xmin=0, xmax=L, ymin=K_min, ymax=K_max,
+        xlabel='x', ylabel='K(x)',
+        response=response)
     plt.show()
+
+# Nose test
+def test_DrawFunction1():
+    """Test with K(x)=x+2."""
+    plotter = DrawFunction(
+        xmin=0, xmax=1, ymin=0, ymax=1)
+
+    x = np.linspace(0, 1, 5)
+    x = x**2  # deform x coordinates
+    x_drawn = x[1:-1]
+    y_drawn = x_drawn + 2
+    # (Linear extrapolation should be exact)
+    plotter.begin_drawing()
+    for x_pt, y_pt in zip(x_drawn, y_drawn):
+        plotter.add_pt(x_pt, y_pt)
+    plotter.end_drawing()
+    x_diff = np.abs(plotter.x - np.array([ 0., 0.0625, 0.25, 0.5625, 1.])).max()
+    y_diff = np.abs(plotter.y - np.array([ 2., 2.0625, 2.25, 2.5625, 3.])).max()
+    assert x_diff < 1E-14
+    assert y_diff < 1E-14
 
 if __name__ == '__main__':
     if len(sys.argv) == 1:
